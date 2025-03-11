@@ -1,0 +1,122 @@
+.TH MINDTHEMAP 1
+.SH NAME
+mindthemap \- keyboard-driven mind mapping application with Rio-inspired visuals
+.SH SYNOPSIS
+.B mindthemap
+[
+.I file
+]
+.SH DESCRIPTION
+.I Mindthemap
+is a mind mapping application with a beautiful Rio-inspired visual design,
+featuring rounded corners, gentle colors, and a vim-like interface.
+It provides an intuitive way to create and organize hierarchical mind maps.
+.PP
+If a file is specified, it will be loaded on startup. Otherwise, a new mind map
+will be created with a "Main Topic" root node.
+.SH MODES
+The application operates in three modes:
+.TP
+.B Normal mode
+For navigation and commands
+.TP
+.B Insert mode
+For editing node text
+.TP
+.B Drag mode
+For manually positioning nodes
+.PP
+.B Normal mode commands:
+.TP
+.B h
+Move to parent node
+.TP
+.B j
+Move to next sibling
+.TP
+.B k
+Move to previous sibling
+.TP
+.B l
+Move to first child
+.TP
+.B i
+Enter insert mode
+.TP
+.B tab
+Add a child to the current node
+.TP
+.B enter
+Add a sibling to the current node
+.TP
+.B d
+Delete current node and its children
+.TP
+.B w
+Write mind map to file
+.TP
+.B r
+Read mind map from file
+.TP
+.B <
+Read from command
+.TP
+.B >
+Write to command
+.TP
+.B q
+Quit
+.PP
+.B Insert mode:
+.TP
+.B Escape or Enter
+Return to normal mode
+.TP
+.B Backspace
+Delete the last character
+.TP
+Any printable character
+Add to node text
+.PP
+.B Mouse interaction:
+.TP
+Left click and drag
+Move any node (including root) to a new position. Nodes snap to a grid for clean alignment.
+.SH FILE FORMAT
+Mind maps are saved in a simple text format:
+.PP
+.B NODE text x y manual_pos nchildren
+.PP
+where:
+.TP
+.I text
+Node content
+.TP
+.I x,y
+Node coordinates
+.TP
+.I manual_pos
+Flag indicating manual positioning
+.TP
+.I nchildren
+Number of child nodes that follow
+.SH EXAMPLES
+Create a new mind map:
+.PP
+.EX
+% mindthemap
+.EE
+.PP
+Load an existing mind map:
+.PP
+.EX
+% mindthemap ideas.mm
+.EE
+.SH SOURCE
+.B https://github.com/jrsharp/mindthemap
+.SH VERSION
+0.1
+.SH "SEE ALSO"
+.IR draw (2),
+.IR keyboard (2),
+.IR mouse (2) 
