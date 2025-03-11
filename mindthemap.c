@@ -1,14 +1,14 @@
 #include "mindthemap.h"
 
 enum {
-	MARGIN = 60,      /* Generous margin for better spacing */
-	HSPACE = 180,     /* Increased horizontal space between nodes */
-	VSPACE = 120,     /* Increased vertical space between nodes */
-	MINW = 180,       /* Minimum node width */
-	NODEH = 60,       /* Node height */
-	PADDING = 24,     /* Text padding inside nodes */
-	CORNER = 12,      /* Corner sprite size */
-	CONN = 9          /* Connection point sprite size */
+	MARGIN = 30,      /* Reduced margin for better use of space */
+	HSPACE = 80,      /* Reduced horizontal space between nodes */
+	VSPACE = 50,      /* Reduced vertical space between nodes */
+	MINW = 100,       /* Reduced minimum node width */
+	NODEH = 30,       /* Reduced node height */
+	PADDING = 10,     /* Reduced text padding inside nodes */
+	CORNER = 8,       /* Corner sprite size (unchanged) */
+	CONN = 4          /* Connection point sprite size (unchanged) */
 };
 
 /* Rio-inspired colors */
@@ -28,77 +28,23 @@ struct Image *screen;
 struct Font *font;
 struct Display *display;
 Rectangle maprect;
+Point viewport = {0, 0};  /* Current viewport offset for panning */
+Point pan_start = {0, 0};  /* Starting point for panning */
+int panning = 0;  /* Flag to indicate if we're panning the viewport */
 char *argv0;
 
-/* Initialize colors and sprites */
+/* Initialize colors */
 void
 initcolors(void)
 {
-	int i, j;
-	
-	back = allocimage(display, Rect(0,0,1,1), screen->chan, 1, 0xFFFFFFFF);
-	high = allocimage(display, Rect(0,0,1,1), screen->chan, 1, 0xEAFFFFFF);
-	bord = allocimage(display, Rect(0,0,1,1), screen->chan, 1, 0x000055FF);
-	text = allocimage(display, Rect(0,0,1,1), screen->chan, 1, 0x000000FF);
-	pale = allocimage(display, Rect(0,0,1,1), screen->chan, 1, 0xAAFFFFFF);
+	back = allocimage(display, Rect(0,0,1,1), screen->chan, 1, 0xFFFFF0FF);  /* Light cream background */
+	high = allocimage(display, Rect(0,0,1,1), screen->chan, 1, 0xB0E0FFFF);  /* Sky blue for root nodes */
+	bord = allocimage(display, Rect(0,0,1,1), screen->chan, 1, 0x000066FF);  /* Navy blue for borders */
+	text = allocimage(display, Rect(0,0,1,1), screen->chan, 1, 0x000000FF);  /* Black for text */
+	pale = allocimage(display, Rect(0,0,1,1), screen->chan, 1, 0xE0E8F0FF);  /* Light steel blue for regular nodes */
 	
 	if(back == nil || high == nil || bord == nil || text == nil || pale == nil)
 		sysfatal("allocimage failed");
-	
-	/* Create corner sprites for each color combination */
-	for(i = 0; i < 4; i++) {
-		for(j = 0; j < 4; j++) {
-			/* Create mask image for the corner sprite */
-			corner_sprites[i][j] = allocimage(display, Rect(0,0,12,12), GREY1, 1, DTransparent);
-			if(corner_sprites[i][j] == nil)
-				sysfatal("allocimage failed for corner sprite");
-		}
-	}
-	
-	/* Load normal node corners (white bg, blue border) */
-	for(i = 0; i < 4; i++) {
-		if(loadimage(corner_sprites[SPRITE_NORMAL][i], 
-			Rect(0,0,12,12), 
-			corner_normal[i], 
-			2*12) < 0)  /* 2 bytes per row for 12 pixels */
-			sysfatal("loadimage failed for normal corner");
-	}
-	
-	/* Load selected node corners (blue bg, white border) */
-	for(i = 0; i < 4; i++) {
-		if(loadimage(corner_sprites[SPRITE_SELECTED][i], 
-			Rect(0,0,12,12), 
-			corner_selected[i], 
-			2*12) < 0)  /* 2 bytes per row for 12 pixels */
-			sysfatal("loadimage failed for selected corner");
-	}
-	
-	/* Create root node corners (copy from normal but use high color) */
-	for(i = 0; i < 4; i++) {
-		if(loadimage(corner_sprites[SPRITE_ROOT][i], 
-			Rect(0,0,12,12), 
-			corner_normal[i], 
-			2*12) < 0)  /* 2 bytes per row for 12 pixels */
-			sysfatal("loadimage failed for root corner");
-	}
-	
-	/* Create alternate node corners (copy from normal but use pale color) */
-	for(i = 0; i < 4; i++) {
-		if(loadimage(corner_sprites[SPRITE_ALT][i], 
-			Rect(0,0,12,12), 
-			corner_normal[i], 
-			2*12) < 0)  /* 2 bytes per row for 12 pixels */
-			sysfatal("loadimage failed for alt corner");
-	}
-	
-	/* Create connection dots */
-	for(i = 0; i < 4; i++) {
-		conn_dots[i] = allocimage(display, Rect(0,0,6,6), GREY1, 1, DTransparent);
-		if(conn_dots[i] == nil)
-			sysfatal("allocimage failed for connection dot");
-		if(loadimage(conn_dots[i], Rect(0,0,6,6), conn_sprite, 2*6) < 0)  /* 2 bytes per row for 6 pixels */
-			sysfatal("loadimage failed for connection dot");
-	}
 }
 
 /* Calculate node width based on text */
@@ -110,43 +56,65 @@ nodewidth(char *text)
 	return p.x + (2 * PADDING);  /* Text width plus padding on both sides */
 }
 
-/* Draw a rounded rectangle using corner sprites */
+/* Draw a rounded rectangle using bezier curves */
 void
 roundedrect(Image *dst, Rectangle r, Image *src, Point sp, int style)
 {
-	Rectangle corner;
-	Rectangle body;
+	int radius = 8;  /* Corner radius */
+	Point p[12];     /* Points for the rounded corners */
 	
-	/* Draw main rectangle body (excluding corners) */
-	body = r;
-	body.min.x += 12;  /* Adjust for corner width */
-	body.max.x -= 12;
+	/* Draw the main rectangle body */
+	Rectangle body = r;
+	body.min.x += radius;
+	body.max.x -= radius;
 	draw(dst, body, src, nil, sp);
 	
-	/* Draw top and bottom bars (between corners) */
-	draw(dst, Rect(r.min.x+12, r.min.y, r.max.x-12, r.min.y+12), src, nil, sp);
-	draw(dst, Rect(r.min.x+12, r.max.y-12, r.max.x-12, r.max.y), src, nil, sp);
+	/* Draw top and bottom bars */
+	draw(dst, Rect(r.min.x+radius, r.min.y, r.max.x-radius, r.min.y+radius), src, nil, sp);
+	draw(dst, Rect(r.min.x+radius, r.max.y-radius, r.max.x-radius, r.max.y), src, nil, sp);
 	
-	/* Draw left and right bars (between corners) */
-	draw(dst, Rect(r.min.x, r.min.y+12, r.min.x+12, r.max.y-12), src, nil, sp);
-	draw(dst, Rect(r.max.x-12, r.min.y+12, r.max.x, r.max.y-12), src, nil, sp);
+	/* Draw left and right bars */
+	draw(dst, Rect(r.min.x, r.min.y+radius, r.min.x+radius, r.max.y-radius), src, nil, sp);
+	draw(dst, Rect(r.max.x-radius, r.min.y+radius, r.max.x, r.max.y-radius), src, nil, sp);
 	
-	/* Draw corners using appropriate sprites as masks */
-	/* Top-left */
-	corner = Rect(r.min.x, r.min.y, r.min.x+12, r.min.y+12);
-	draw(dst, corner, src, corner_sprites[style][CORNER_TL], ZP);
+	/* Use the appropriate border color based on the node's state */
+	Image *border = bord;  /* Default to normal border color */
 	
-	/* Top-right */
-	corner = Rect(r.max.x-12, r.min.y, r.max.x, r.min.y+12);
-	draw(dst, corner, src, corner_sprites[style][CORNER_TR], ZP);
+	/* Top-left corner */
+	p[0] = Pt(r.min.x+radius, r.min.y);          /* Start */
+	p[1] = Pt(r.min.x+radius/2, r.min.y);        /* Control point 1 */
+	p[2] = Pt(r.min.x, r.min.y+radius/2);        /* Control point 2 */
+	p[3] = Pt(r.min.x, r.min.y+radius);          /* End */
 	
-	/* Bottom-left */
-	corner = Rect(r.min.x, r.max.y-12, r.min.x+12, r.max.y);
-	draw(dst, corner, src, corner_sprites[style][CORNER_BL], ZP);
+	/* Top-right corner */
+	p[4] = Pt(r.max.x-radius, r.min.y);
+	p[5] = Pt(r.max.x-radius/2, r.min.y);
+	p[6] = Pt(r.max.x, r.min.y+radius/2);
+	p[7] = Pt(r.max.x, r.min.y+radius);
 	
-	/* Bottom-right */
-	corner = Rect(r.max.x-12, r.max.y-12, r.max.x, r.max.y);
-	draw(dst, corner, src, corner_sprites[style][CORNER_BR], ZP);
+	/* Bottom-right corner */
+	p[8] = Pt(r.max.x, r.max.y-radius);
+	p[9] = Pt(r.max.x, r.max.y-radius/2);
+	p[10] = Pt(r.max.x-radius/2, r.max.y);
+	p[11] = Pt(r.max.x-radius, r.max.y);
+	
+	/* Draw the bezier curves for each corner */
+	bezier(dst, p[0], p[1], p[2], p[3], Enddisc, Enddisc, 1, border, ZP);
+	bezier(dst, p[4], p[5], p[6], p[7], Enddisc, Enddisc, 1, border, ZP);
+	bezier(dst, p[8], p[9], p[10], p[11], Enddisc, Enddisc, 1, border, ZP);
+	
+	/* Bottom-left corner */
+	p[0] = Pt(r.min.x, r.max.y-radius);
+	p[1] = Pt(r.min.x, r.max.y-radius/2);
+	p[2] = Pt(r.min.x+radius/2, r.max.y);
+	p[3] = Pt(r.min.x+radius, r.max.y);
+	bezier(dst, p[0], p[1], p[2], p[3], Enddisc, Enddisc, 1, border, ZP);
+	
+	/* Draw straight lines for the borders */
+	draw(dst, Rect(r.min.x+radius, r.min.y, r.max.x-radius, r.min.y+1), border, nil, ZP);  /* Top */
+	draw(dst, Rect(r.min.x+radius, r.max.y-1, r.max.x-radius, r.max.y), border, nil, ZP);  /* Bottom */
+	draw(dst, Rect(r.min.x, r.min.y+radius, r.min.x+1, r.max.y-radius), border, nil, ZP);  /* Left */
+	draw(dst, Rect(r.max.x-1, r.min.y+radius, r.max.x, r.max.y-radius), border, nil, ZP);  /* Right */
 }
 
 void
@@ -280,7 +248,7 @@ layoutmap(Node *node, int depth)
 	if(depth == 0) {
 		/* Root initialization */
 		memset(level_height, 0, sizeof(level_height));
-		xpos = maprect.min.x + MARGIN;
+		xpos = MARGIN;  /* Remove dependency on maprect */
 		max_width = 0;
 	}
 	
@@ -296,14 +264,14 @@ layoutmap(Node *node, int depth)
 		
 		if(depth > 0) {
 			/* Position vertically based on previous nodes at this level */
-			node->pos.y = maprect.min.y + MARGIN + level_height[depth];
+			node->pos.y = MARGIN + level_height[depth];
 			level_height[depth] += NODEH + VSPACE;
 		} else {
-			/* Root node centered vertically */
-			node->pos.y = (maprect.max.y - maprect.min.y) / 2;
+			/* Root node at a fixed position if not manually placed */
+			node->pos.y = MARGIN;
 		}
 		
-		/* Set bounds rectangle with padding */
+		/* Set bounds rectangle */
 		node->bounds = (Rectangle){
 			Pt(node->pos.x, node->pos.y),
 			Pt(node->pos.x + width, node->pos.y + NODEH)
@@ -318,126 +286,34 @@ layoutmap(Node *node, int depth)
 	for(i = 0; i < node->nchildren; i++) {
 		layoutmap(node->children[i], depth + 1);
 	}
-	
-	/* After all children are laid out, center the tree if needed */
-	if(depth == 0 && max_width < maprect.max.x - maprect.min.x) {
-		int offset = (maprect.max.x - maprect.min.x - max_width) / 2;
-		/* Only center nodes that aren't manually positioned */
-		center_tree_auto(root, offset);
-	}
 }
 
-/* Center only automatically positioned nodes */
+/* Draw all connection lines in the tree */
 void
-center_tree_auto(Node *node, int offset)
+drawlines(Node *node)
 {
 	int i;
 	
 	if(node == nil)
 		return;
 	
-	if(!node->manual_pos) {
-		node->pos.x += offset;
-		node->bounds.min.x += offset;
-		node->bounds.max.x += offset;
+	/* Draw connecting lines to children */
+	for(i = 0; i < node->nchildren; i++) {
+		Point from, to;
+		
+		from.x = node->bounds.min.x + (node->bounds.max.x - node->bounds.min.x) / 2;
+		from.y = node->bounds.max.y;
+		
+		to.x = node->children[i]->bounds.min.x + 
+			(node->children[i]->bounds.max.x - node->children[i]->bounds.min.x) / 2;
+		to.y = node->children[i]->bounds.min.y;
+		
+		drawconnection(from, to, 1, bord);  /* Always use 1px lines */
 	}
 	
-	for(i = 0; i < node->nchildren; i++)
-		center_tree_auto(node->children[i], offset);
-}
-
-void
-drawmap(void)
-{
-	Rectangle winr;
-	int d;
-	
-	if(screen == nil || display == nil)
-		return;
-	
-	/* Get the actual window rectangle */
-	winr = screen->r;
-	
-	/* Calculate drawing area based on window size */
-	d = (Dx(winr) > Dy(winr)) ? Dy(winr) - 20 : Dx(winr) - 20;
-	
-	/* Clear entire window first */
-	draw(screen, winr, back, nil, ZP);
-	
-	if(root != nil) {
-		/* Set maprect to window bounds minus margins */
-		maprect = insetrect(winr, MARGIN);
-		
-		/* Constrain drawing area */
-		if(Dx(maprect) > d) {
-			int excess = Dx(maprect) - d;
-			maprect.min.x += excess/2;
-			maprect.max.x -= excess/2;
-		}
-		if(Dy(maprect) > d) {
-			int excess = Dy(maprect) - d;
-			maprect.min.y += excess/2;
-			maprect.max.y -= excess/2;
-		}
-		
-		/* Leave room for status line */
-		maprect.max.y -= font->height + 5;
-		
-		/* Recalculate layout before drawing */
-		layoutmap(root, 0);
-		
-		/* Draw nodes */
-		drawnode(root);
-		
-		/* Draw status line at bottom of window */
-		Rectangle statusr = Rect(winr.min.x, winr.max.y - font->height - 5,
-			winr.max.x, winr.max.y - 5);
-		draw(screen, statusr, bord, nil, ZP);
-		
-		/* Draw mode on left side */
-		string(screen, Pt(statusr.min.x + 5, statusr.min.y), back, ZP, font,
-			mode == NORMAL ? "NORMAL" : "INSERT");
-		
-		/* Draw version on right side */
-		char *version = "mindthemap 0.1";
-		string(screen, Pt(statusr.max.x - stringwidth(font, version) - 5, statusr.min.y),
-			back, ZP, font, version);
-	}
-	
-	flushimage(display, 1);
-}
-
-/* Draw connection between nodes with connection point sprites */
-void
-drawconnection(Point from, Point to, int thickness, Image *color)
-{
-	Point mid;
-	Rectangle dot;
-	int style = (color == bord) ? SPRITE_NORMAL : SPRITE_SELECTED;
-	
-	/* Only draw if both points are within bounds */
-	if(from.x < maprect.min.x || from.x >= maprect.max.x ||
-	   from.y < maprect.min.y || from.y >= maprect.max.y ||
-	   to.x < maprect.min.x || to.x >= maprect.max.x ||
-	   to.y < maprect.min.y || to.y >= maprect.max.y)
-		return;
-	
-	/* Draw connection points using appropriate sprite as mask */
-	dot = Rect(from.x-3, from.y-3, from.x+3, from.y+3);
-	draw(screen, dot, color, conn_dots[style], ZP);
-	
-	dot = Rect(to.x-3, to.y-3, to.x+3, to.y+3);
-	draw(screen, dot, color, conn_dots[style], ZP);
-	
-	/* Calculate midpoint with increased vertical offset for gentler curve */
-	mid = Pt((from.x + to.x)/2, from.y + (to.y - from.y)/3);
-	
-	/* Only draw lines if midpoint is also within bounds */
-	if(mid.x >= maprect.min.x && mid.x < maprect.max.x &&
-	   mid.y >= maprect.min.y && mid.y < maprect.max.y) {
-		/* Draw connection lines */
-		line(screen, from, mid, 0, 0, thickness, color, ZP);
-		line(screen, mid, to, 0, 0, thickness, color, ZP);
+	/* Recursively draw lines for children */
+	for(i = 0; i < node->nchildren; i++) {
+		drawlines(node->children[i]);
 	}
 }
 
@@ -451,7 +327,7 @@ drawnode(Node *node)
 	Image *bg, *fg;
 	int depth = 0;
 	Node *p;
-	int style;
+	int style = 0;
 	
 	if(node == nil)
 		return;
@@ -462,27 +338,30 @@ drawnode(Node *node)
 	
 	r = node->bounds;
 	
-	/* Skip if completely outside maprect bounds */
-	if(r.max.x <= maprect.min.x || r.min.x >= maprect.max.x ||
-	   r.max.y <= maprect.min.y || r.min.y >= maprect.max.y)
+	/* Apply viewport offset to bounds */
+	r.min.x -= viewport.x;
+	r.min.y -= viewport.y;
+	r.max.x -= viewport.x;
+	r.max.y -= viewport.y;
+	
+	/* Skip if completely outside window bounds */
+	if(r.max.x <= screen->r.min.x || r.min.x >= screen->r.max.x ||
+	   r.max.y <= screen->r.min.y || r.min.y >= screen->r.max.y)
 		return;
 	
-	/* Select colors and style based on node state and depth */
+	/* Select colors based on node state and depth */
 	if(node == current) {
 		bg = bord;
 		fg = back;
-		style = SPRITE_SELECTED;
 	} else if(node == root) {
 		bg = high;
 		fg = text;
-		style = SPRITE_ROOT;
 	} else {
 		bg = depth % 2 ? pale : back;
 		fg = text;
-		style = depth % 2 ? SPRITE_ALT : SPRITE_NORMAL;
 	}
 	
-	/* Draw node with appropriate corner sprites */
+	/* Draw node with bezier corners */
 	roundedrect(screen, r, bg, ZP, style);
 	
 	/* Draw node text if there's room */
@@ -492,24 +371,96 @@ drawnode(Node *node)
 		string(screen, txtp, fg, ZP, font, node->text);
 	}
 	
-	/* Draw connecting lines to children first (behind nodes) */
-	for(i = 0; i < node->nchildren; i++) {
-		Point from, to;
-		
-		from.x = node->bounds.min.x + (node->bounds.max.x - node->bounds.min.x) / 2;
-		from.y = node->bounds.max.y;
-		
-		to.x = node->children[i]->bounds.min.x + 
-			(node->children[i]->bounds.max.x - node->children[i]->bounds.min.x) / 2;
-		to.y = node->children[i]->bounds.min.y;
-		
-		drawconnection(from, to, node == root ? 2 : 1, bord);
-	}
-	
 	/* Draw children after parent */
 	for(i = 0; i < node->nchildren; i++) {
 		drawnode(node->children[i]);
 	}
+}
+
+void
+drawmap(void)
+{
+	Rectangle winr;
+	char buf[128];
+	
+	if(screen == nil || display == nil)
+		return;
+	
+	/* Get the actual window rectangle */
+	winr = screen->r;
+	
+	/* Clear entire window first */
+	draw(screen, winr, back, nil, ZP);
+	
+	if(root != nil) {
+		/* Set maprect to window bounds */
+		maprect = winr;
+		
+		/* Leave room for status line */
+		maprect.max.y -= font->height + 5;
+		
+		/* Recalculate layout before drawing */
+		layoutmap(root, 0);
+		
+		/* First draw all connection lines */
+		drawlines(root);
+		
+		/* Then draw all nodes on top */
+		drawnode(root);
+		
+		/* Draw status line at bottom of window */
+		Rectangle statusr = Rect(winr.min.x, winr.max.y - font->height - 5,
+			winr.max.x, winr.max.y - 5);
+		draw(screen, statusr, bord, nil, ZP);
+		
+		/* Draw mode and canvas drag status on left side */
+		char *modestr;
+		switch(mode) {
+			case NORMAL: modestr = "NORMAL"; break;
+			case INSERT: modestr = "INSERT"; break;
+			case DRAGGING: modestr = "DRAGGING"; break;
+			case CANVAS_DRAG: modestr = panning ? "CANVAS DRAG (active)" : "CANVAS DRAG"; break;
+			default: modestr = "UNKNOWN"; break;
+		}
+		string(screen, Pt(statusr.min.x + 5, statusr.min.y), back, ZP, font, modestr);
+		
+		/* Draw version and coordinates on right side */
+		snprint(buf, sizeof(buf), "mindthemap 0.1 [%d,%d]", viewport.x, viewport.y);
+		string(screen, Pt(statusr.max.x - stringwidth(font, buf) - 5, statusr.min.y),
+			back, ZP, font, buf);
+	}
+	
+	flushimage(display, 1);
+}
+
+/* Draw connection between nodes with bezier curves */
+void
+drawconnection(Point from, Point to, int thickness, Image *color)
+{
+	Point p[4];
+	int dy = to.y - from.y;
+	
+	/* Apply viewport offset to points */
+	from.x -= viewport.x;
+	from.y -= viewport.y;
+	to.x -= viewport.x;
+	to.y -= viewport.y;
+	
+	/* Only draw if both points are within bounds */
+	if(from.x < maprect.min.x || from.x >= maprect.max.x ||
+	   from.y < maprect.min.y || from.y >= maprect.max.y ||
+	   to.x < maprect.min.x || to.x >= maprect.max.x ||
+	   to.y < maprect.min.y || to.y >= maprect.max.y)
+		return;
+	
+	/* Calculate control points for a smooth curve */
+	p[0] = from;
+	p[1] = Pt(from.x, from.y + dy/3);  /* First control point at 1/3 distance */
+	p[2] = Pt(to.x, from.y + 2*dy/3);  /* Second control point at 2/3 distance */
+	p[3] = to;
+	
+	/* Draw the bezier curve */
+	bezier(screen, p[0], p[1], p[2], p[3], Enddisc, Enddisc, thickness, color, ZP);
 }
 
 /* Handle vim-like navigation */
@@ -563,21 +514,32 @@ handlekey(Rune key, Event *ev)
 	char buf[1024];
 	
 	/* Handle keys based on mode */
-	if(mode == NORMAL) {
+	if(mode == NORMAL || mode == CANVAS_DRAG) {
 		switch(key) {
+		case Kesc:  /* Exit canvas drag mode */
+			if(mode == CANVAS_DRAG) {
+				panning = 0;
+				switchmode(NORMAL);
+			}
+			break;
 		case 'i':  /* Enter insert mode */
-			switchmode(INSERT);
+			if(mode == NORMAL)
+				switchmode(INSERT);
 			break;
 		case '\t':  /* Add child to current node */
-			addchild(current);
-			drawmap();
+			if(mode == NORMAL) {
+				addchild(current);
+				drawmap();
+			}
 			break;
 		case '\n':  /* Add sibling to current node */
-			addsibling(current);
-			drawmap();
+			if(mode == NORMAL) {
+				addsibling(current);
+				drawmap();
+			}
 			break;
 		case 'd':  /* Delete current node */
-			if(current != root) {
+			if(mode == NORMAL && current != root) {
 				Node *parent = current->parent;
 				deletenode(current);
 				current = parent;
@@ -589,18 +551,28 @@ handlekey(Rune key, Event *ev)
 		case 'j':
 		case 'k':
 		case 'l':
-			navigate(key);
-			drawmap();
+			if(mode == NORMAL) {
+				navigate(key);
+				drawmap();
+			}
 			break;
 		case 'q':  /* Quit command */
 		case 'r':  /* Read file */
 		case 'w':  /* Write file */
 		case '<':  /* Read from command */
 		case '>':  /* Write to command */
-			buf[0] = key;
-			buf[1] = 0;
-			if (eenter("Cmd", buf, sizeof(buf), &ev->mouse) > 0)
-				handlecmd(buf);
+			if(mode == NORMAL) {
+				buf[0] = key;
+				buf[1] = 0;
+				if (eenter("Cmd", buf, sizeof(buf), &ev->mouse) > 0)
+					handlecmd(buf);
+			}
+			break;
+		case ' ':  /* Toggle canvas drag mode */
+			if(mode == NORMAL)
+				switchmode(CANVAS_DRAG);
+			else if(mode == CANVAS_DRAG)
+				switchmode(NORMAL);
 			break;
 		}
 	} else if(mode == INSERT) {
@@ -657,6 +629,9 @@ findnode(Node *node, Point p)
 	if(node == nil)
 		return nil;
 	
+	/* Apply viewport offset to point for hit testing */
+	Point test = addpt(p, viewport);
+	
 	/* Check children first (reverse order for top-to-bottom hit testing) */
 	for(i = node->nchildren - 1; i >= 0; i--) {
 		found = findnode(node->children[i], p);
@@ -665,7 +640,7 @@ findnode(Node *node, Point p)
 	}
 	
 	/* Check if point is within this node's bounds */
-	if(ptinrect(p, node->bounds))
+	if(ptinrect(test, node->bounds))
 		return node;
 	
 	return nil;
@@ -686,13 +661,12 @@ updatedrag(Node *node, Point mouse)
 {
 	Point newpos;
 	int width;
-	Rectangle bounds;
 	
-	if(node == nil)  /* Only check for nil node */
+	if(node == nil)
 		return;
 	
 	/* Calculate new position based on mouse and drag offset */
-	newpos = addpt(mouse, node->drag_offset);
+	newpos = addpt(addpt(mouse, viewport), node->drag_offset);
 	
 	/* Snap to grid */
 	newpos = snaptoGrid(newpos);
@@ -701,21 +675,6 @@ updatedrag(Node *node, Point mouse)
 	width = nodewidth(node->text);
 	if(width < MINW)
 		width = MINW;
-	
-	bounds = (Rectangle){
-		Pt(newpos.x, newpos.y),
-		Pt(newpos.x + width, newpos.y + NODEH)
-	};
-	
-	/* Keep node within maprect bounds */
-	if(bounds.min.x < maprect.min.x)
-		newpos.x = maprect.min.x;
-	if(bounds.min.y < maprect.min.y)
-		newpos.y = maprect.min.y;
-	if(bounds.max.x > maprect.max.x)
-		newpos.x = maprect.max.x - width;
-	if(bounds.max.y > maprect.max.y)
-		newpos.y = maprect.max.y - NODEH;
 	
 	/* Update node position and bounds */
 	node->pos = newpos;
@@ -1004,21 +963,43 @@ main(int argc, char *argv[])
 		switch(e) {
 		case Emouse:
 			if(ev.mouse.buttons & 1) {  /* Left button */
-				if(mode != DRAGGING) {
+				if(mode != DRAGGING && mode != CANVAS_DRAG) {
 					Node *hit = findnode(root, ev.mouse.xy);
-					if(hit != nil) {  /* Remove root node check */
+					if(hit != nil) {
 						current = hit;
 						mode = DRAGGING;
-						hit->drag_offset = subpt(hit->pos, ev.mouse.xy);
+						/* Calculate drag offset in absolute coordinates */
+						hit->drag_offset = subpt(hit->pos, addpt(ev.mouse.xy, viewport));
+						drawmap();
+					} else {
+						/* Start canvas drag mode */
+						switchmode(CANVAS_DRAG);
+						panning = 1;
+						pan_start = ev.mouse.xy;
 						drawmap();
 					}
-				} else {
+				} else if(mode == DRAGGING) {
 					updatedrag(current, ev.mouse.xy);
 					drawmap();
+				} else if(mode == CANVAS_DRAG) {
+					/* Update viewport position */
+					viewport.x += pan_start.x - ev.mouse.xy.x;
+					viewport.y += pan_start.y - ev.mouse.xy.y;
+					pan_start = ev.mouse.xy;
+					drawmap();
 				}
-			} else if(mode == DRAGGING) {
-				mode = NORMAL;
-				drawmap();
+			} else {
+				if(mode == DRAGGING) {
+					mode = NORMAL;
+					drawmap();
+				} else if(mode == CANVAS_DRAG) {
+					/* Exit canvas drag mode on mouse up if we were panning */
+					if(panning) {
+						panning = 0;
+						switchmode(NORMAL);
+						drawmap();
+					}
+				}
 			}
 			break;
 		case Ekeyboard:

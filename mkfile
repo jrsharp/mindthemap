@@ -1,14 +1,14 @@
 </$objtype/mkfile
 
-BIN=/$objtype/bin
-TARG=mindthemap
+TARG=slides9
 OFILES=\
-	mindthemap.$O
+	slides9.$O\
 
 HFILES=\
-	mindthemap.h
+	slides9.h\
 
-</sys/src/cmd/mkone
+BIN=/$objtype/bin
+LDFLAGS=-ldraw -l9 -lmemdraw -lmemlayer -lkeyboard -levent
 
-#LDFLAGS=-ldraw -lthread -l9 -lmemdraw -lmemlayer -lkeyboard -levent
+&lt;/sys/src/cmd/mkone
 
